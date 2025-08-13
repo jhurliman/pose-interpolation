@@ -680,6 +680,12 @@ int main(int, const char**) {
 
     scene.log(upd); // send one update (replaces entities by matching id)
 
+    // Continuously publish parameter values
+    std::vector<foxglove::Parameter> params;
+    params.emplace_back("animated", g_animated.load());
+    params.emplace_back("t", std::floor(g_paramT.load() * 100.0) / 100.0);
+    server.publishParameterValues(std::move(params));
+
     std::this_thread::sleep_for(std::chrono::milliseconds(33)); // ~30 Hz
   }
 
