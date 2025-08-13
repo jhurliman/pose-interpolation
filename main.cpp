@@ -85,10 +85,10 @@ inline Quat q_conj(const Quat& q) {
 }
 
 inline Quat q_from_euler(double rx, double ry, double rz) { // XYZ intrinsic
-  double cx = std::cos(rx * 0.5), sx = std::sin(rx * 0.5);
-  double cy = std::cos(ry * 0.5), sy = std::sin(ry * 0.5);
-  double cz = std::cos(rz * 0.5), sz = std::sin(rz * 0.5);
-  Quat qx{sx, 0, 0, cx}, qy{0, sy, 0, cy}, qz{0, 0, sz, cz};
+  const double cx = std::cos(rx * 0.5), sx = std::sin(rx * 0.5);
+  const double cy = std::cos(ry * 0.5), sy = std::sin(ry * 0.5);
+  const double cz = std::cos(rz * 0.5), sz = std::sin(rz * 0.5);
+  const Quat qx{sx, 0, 0, cx}, qy{0, sy, 0, cy}, qz{0, 0, sz, cz};
   return q_normalized(q_mul(q_mul(qx, qy), qz));
 }
 
@@ -100,17 +100,17 @@ inline Quat q_slerp(Quat a, Quat b, double t) {
     b = {-b.x, -b.y, -b.z, -b.w};
     d = -d;
   }
-  const double EPS = 1e-6;
+  constexpr double EPS = 1e-6;
   if (1.0 - d < EPS) {
     // LERP then normalize
-    Quat q{
+    const Quat q{
       a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), a.z + t * (b.z - a.z), a.w + t * (b.w - a.w)};
     return q_normalized(q);
   }
-  double theta = std::acos(d);
-  double s = std::sin(theta);
-  double w1 = std::sin((1 - t) * theta) / s;
-  double w2 = std::sin(t * theta) / s;
+  const double theta = std::acos(d);
+  const double s = std::sin(theta);
+  const double w1 = std::sin((1 - t) * theta) / s;
+  const double w2 = std::sin(t * theta) / s;
   return q_normalized(
     {a.x * w1 + b.x * w2, a.y * w1 + b.y * w2, a.z * w1 + b.z * w2, a.w * w1 + b.w * w2});
 }
@@ -160,28 +160,28 @@ inline Mat3 R_from_quat(const Quat& q) {
 }
 
 inline Quat quat_from_R(const Mat3& R) {
-  double tr = R.m[0][0] + R.m[1][1] + R.m[2][2];
+  const double tr = R.m[0][0] + R.m[1][1] + R.m[2][2];
   Quat q;
   if (tr > 0) {
-    double S = std::sqrt(tr + 1.0) * 2;
+    const double S = std::sqrt(tr + 1.0) * 2;
     q.w = 0.25 * S;
     q.x = (R.m[2][1] - R.m[1][2]) / S;
     q.y = (R.m[0][2] - R.m[2][0]) / S;
     q.z = (R.m[1][0] - R.m[0][1]) / S;
   } else if (R.m[0][0] > R.m[1][1] && R.m[0][0] > R.m[2][2]) {
-    double S = std::sqrt(1.0 + R.m[0][0] - R.m[1][1] - R.m[2][2]) * 2;
+    const double S = std::sqrt(1.0 + R.m[0][0] - R.m[1][1] - R.m[2][2]) * 2;
     q.w = (R.m[2][1] - R.m[1][2]) / S;
     q.x = 0.25 * S;
     q.y = (R.m[0][1] + R.m[1][0]) / S;
     q.z = (R.m[0][2] + R.m[2][0]) / S;
   } else if (R.m[1][1] > R.m[2][2]) {
-    double S = std::sqrt(1.0 - R.m[0][0] + R.m[1][1] - R.m[2][2]) * 2;
+    const double S = std::sqrt(1.0 - R.m[0][0] + R.m[1][1] - R.m[2][2]) * 2;
     q.w = (R.m[0][2] - R.m[2][0]) / S;
     q.x = (R.m[0][1] + R.m[1][0]) / S;
     q.y = 0.25 * S;
     q.z = (R.m[1][2] + R.m[2][1]) / S;
   } else {
-    double S = std::sqrt(1.0 - R.m[0][0] - R.m[1][1] + R.m[2][2]) * 2;
+    const double S = std::sqrt(1.0 - R.m[0][0] - R.m[1][1] + R.m[2][2]) * 2;
     q.w = (R.m[1][0] - R.m[0][1]) / S;
     q.x = (R.m[0][2] + R.m[2][0]) / S;
     q.y = (R.m[1][2] + R.m[2][1]) / S;
@@ -225,16 +225,16 @@ inline Mat3 scale(const Mat3& A, double s) {
 }
 
 inline Mat3 so3_exp(const Vec3& w) {
-  double th = norm(w);
-  Mat3 I = I3();
+  const double th = norm(w);
+  const Mat3 I = I3();
   if (th < 1e-8) {
-    Mat3 W = hat(w);
-    Mat3 W2 = matmul(W, W);
+    const Mat3 W = hat(w);
+    const Mat3 W2 = matmul(W, W);
     return add(I, add(scale(W, 1 - th * th / 6.0), scale(W2, 0.5 - th * th / 24.0)));
   } else {
-    Vec3 a = w * (1.0 / th);
-    Mat3 W = hat(a), W2 = matmul(W, W);
-    double s = std::sin(th), c = std::cos(th);
+    const Vec3 a = w * (1.0 / th);
+    const Mat3 W = hat(a), W2 = matmul(W, W);
+    const double s = std::sin(th), c = std::cos(th);
     return add(I, add(scale(W, s), scale(W2, 1 - c)));
   }
 }
@@ -245,9 +245,9 @@ inline Vec3 vee(const Mat3& M) {
 }
 
 inline Vec3 so3_log(const Mat3& R) {
-  double tr = R.m[0][0] + R.m[1][1] + R.m[2][2];
-  double c = std::max(-1.0, std::min(1.0, (tr - 1.0) / 2.0));
-  double th = std::acos(c);
+  const double tr = R.m[0][0] + R.m[1][1] + R.m[2][2];
+  const double c = std::max(-1.0, std::min(1.0, (tr - 1.0) / 2.0));
+  const double th = std::acos(c);
   if (th < 1e-8) {
     Mat3 Rt{};
     Rt.m[0][1] = R.m[0][1];
@@ -272,39 +272,39 @@ inline Vec3 so3_log(const Mat3& R) {
     S.m[2][0] = -S.m[0][2];
     S.m[1][2] = R.m[1][2] - R.m[2][1];
     S.m[2][1] = -S.m[1][2];
-    double f = th / (2.0 * std::sin(th));
-    Vec3 w = vee(S);
+    const double f = th / (2.0 * std::sin(th));
+    const Vec3 w = vee(S);
     return {w.x * f, w.y * f, w.z * f};
   }
 }
 
 inline Mat3 so3_left_jacobian(const Vec3& w) {
-  double th = norm(w);
-  Mat3 I = I3();
+  const double th = norm(w);
+  const Mat3 I = I3();
   if (th < 1e-8) {
-    Mat3 W = hat(w), W2 = matmul(W, W);
+    const Mat3 W = hat(w), W2 = matmul(W, W);
     return add(I, add(scale(W, 0.5), scale(W2, 1.0 / 6.0)));
   } else {
-    Vec3 a = w * (1.0 / th);
-    Mat3 W = hat(a), W2 = matmul(W, W);
-    double A = (1 - std::cos(th)) / (th * th);
-    double B = (th - std::sin(th)) / (th * th * th);
+    const Vec3 a = w * (1.0 / th);
+    const Mat3 W = hat(a), W2 = matmul(W, W);
+    const double A = (1 - std::cos(th)) / (th * th);
+    const double B = (th - std::sin(th)) / (th * th * th);
     return add(I, add(scale(W, A * th), scale(W2, B * th * th)));
   }
 }
 
 inline Mat3 so3_left_jacobian_inv(const Vec3& w) {
-  double th = norm(w);
-  Mat3 I = I3();
+  const double th = norm(w);
+  const Mat3 I = I3();
   if (th < 1e-8) {
-    Mat3 W = hat(w), W2 = matmul(W, W);
+    const Mat3 W = hat(w), W2 = matmul(W, W);
     return add(I, add(scale(W, -0.5), scale(W2, 1.0 / 12.0)));
   } else {
-    Vec3 a = w * (1.0 / th);
-    Mat3 W = hat(a), W2 = matmul(W, W);
-    double half = 0.5;
-    double cot_half = (1 + std::cos(th)) / std::sin(th); // cot(th/2)
-    double B = (1.0 / (th * th)) * (1 - (th * 0.5) * cot_half);
+    const Vec3 a = w * (1.0 / th);
+    const Mat3 W = hat(a), W2 = matmul(W, W);
+    const double half = 0.5;
+    const double cot_half = (1 + std::cos(th)) / std::sin(th); // cot(th/2)
+    const double B = (1.0 / (th * th)) * (1 - (th * 0.5) * cot_half);
     return add(I, add(scale(W, -half * th), scale(W2, B * th * th)));
   }
 }
@@ -315,8 +315,8 @@ struct SE3 {
 };
 
 inline SE3 se3_exp(const Vec3& v, const Vec3& w) {
-  Mat3 R = so3_exp(w);
-  Mat3 J = so3_left_jacobian(w);
+  const Mat3 R = so3_exp(w);
+  const Mat3 J = so3_left_jacobian(w);
   Vec3 p = {J.m[0][0] * v.x + J.m[0][1] * v.y + J.m[0][2] * v.z,
     J.m[1][0] * v.x + J.m[1][1] * v.y + J.m[1][2] * v.z,
     J.m[2][0] * v.x + J.m[2][1] * v.y + J.m[2][2] * v.z};
@@ -324,8 +324,8 @@ inline SE3 se3_exp(const Vec3& v, const Vec3& w) {
 }
 
 inline std::pair<Vec3, Vec3> se3_log(const SE3& T) {
-  Vec3 w = so3_log(T.R);
-  Mat3 Jinv = so3_left_jacobian_inv(w);
+  const Vec3 w = so3_log(T.R);
+  const Mat3 Jinv = so3_left_jacobian_inv(w);
   Vec3 v{Jinv.m[0][0] * T.p.x + Jinv.m[0][1] * T.p.y + Jinv.m[0][2] * T.p.z,
     Jinv.m[1][0] * T.p.x + Jinv.m[1][1] * T.p.y + Jinv.m[1][2] * T.p.z,
     Jinv.m[2][0] * T.p.x + Jinv.m[2][1] * T.p.y + Jinv.m[2][2] * T.p.z};
@@ -353,9 +353,9 @@ inline SE3 se3_inv(const SE3& T) {
 
 // Interpolants
 inline SE3 interpolate_se3(const SE3& T0, const SE3& T1, double t) {
-  SE3 dT = se3_mul(se3_inv(T0), T1);
-  auto [v, w] = se3_log(dT);
-  SE3 dTt = se3_exp(Vec3{v.x * t, v.y * t, v.z * t}, Vec3{w.x * t, w.y * t, w.z * t});
+  const SE3 dT = se3_mul(se3_inv(T0), T1);
+  const auto [v, w] = se3_log(dT);
+  const SE3 dTt = se3_exp(Vec3{v.x * t, v.y * t, v.z * t}, Vec3{w.x * t, w.y * t, w.z * t});
   return se3_mul(T0, dTt);
 }
 
@@ -384,7 +384,7 @@ inline Pose pose_from_se3(const SE3& T) {
 
 // Triad arrows (X red, Y green, Z blue). Arrow points along +X in local frame.
 static ArrowPrimitive make_arrow(
-  const Pose& base, const Quat& extra_rot, Color c, double L = 0.3, double d = 0.02) {
+  const Pose& base, const Quat& extra_rot, const Color& c, double L = 0.3, double d = 0.02) {
   Pose p = base;
 
   // Read base orientation as Quat (identity if missing)
@@ -430,12 +430,12 @@ static foxglove::schemas::TextPrimitive make_label_above(const SE3& T, const std
 }
 
 static Quat q_axis_y() { // rot +90deg about Z: +X -> +Y
-  double s = std::sin(M_PI * 0.25), c = std::cos(M_PI * 0.25);
+  const double s = std::sin(M_PI * 0.25), c = std::cos(M_PI * 0.25);
   return Quat{0, 0, s, c};
 }
 
 static Quat q_axis_z() { // rot +90deg about Y: +X -> +Z
-  double s = std::sin(M_PI * 0.25), c = std::cos(M_PI * 0.25);
+  const double s = std::sin(M_PI * 0.25), c = std::cos(M_PI * 0.25);
   return Quat{0, s, 0, c};
 }
 
@@ -445,8 +445,10 @@ static void add_triad(SceneEntity& e, const Pose& base, double scale = 0.35) {
   e.arrows.push_back(make_arrow(base, q_axis_z(), rgba(0, 0, 1, 1), scale, 0.02)); // Z blue
 }
 
-static LinePrimitive line_from_points(
-  const std::vector<Vec3>& pts, Color c, double thickness = 2.0, bool scaleInvariant = true) {
+static LinePrimitive line_from_points(const std::vector<Vec3>& pts,
+  const Color& c,
+  double thickness = 2.0,
+  bool scaleInvariant = true) {
   LinePrimitive L;
   L.type = foxglove::schemas::LinePrimitive::LineType::LINE_STRIP;
   L.pose = Pose{
@@ -531,13 +533,13 @@ int main(int, const char**) {
   auto scene = std::move(scene_chan_result.value());
 
   // ---- Start & End poses (match the React demo) ----
-  Vec3 p0{-1.2, 0.4, -0.6};
-  Quat q0 = q_from_euler(0.2, 0.6, -0.1);
-  Vec3 p1{1.1, 0.5, 0.8};
-  Quat q1 = q_from_euler(-1.2, -0.5, 1.0);
+  const Vec3 p0{-1.2, 0.4, -0.6};
+  const Quat q0 = q_from_euler(0.2, 0.6, -0.1);
+  const Vec3 p1{1.1, 0.5, 0.8};
+  const Quat q1 = q_from_euler(-1.2, -0.5, 1.0);
 
-  SE3 T0{R_from_quat(q0), p0};
-  SE3 T1{R_from_quat(q1), p1};
+  const SE3 T0{R_from_quat(q0), p0};
+  const SE3 T1{R_from_quat(q1), p1};
 
   // Animation state (ping-pong t in [0,1])
   double t = 0.0;
@@ -555,7 +557,7 @@ int main(int, const char**) {
 
   while (!done) {
     auto now = std::chrono::steady_clock::now();
-    double dt = std::chrono::duration<double>(now - last).count();
+    const double dt = std::chrono::duration<double>(now - last).count();
     last = now;
     if (g_animated.load()) {
       // Update t based on speed and direction
@@ -575,14 +577,14 @@ int main(int, const char**) {
     }
 
     // Interpolate
-    Vec3 p_lerp = lerp(p0, p1, t);
-    Quat q_lerp = q_slerp(q0, q1, t);
-    SE3 T_lerp{R_from_quat(q_lerp), p_lerp};
+    const Vec3 p_lerp = lerp(p0, p1, t);
+    const Quat q_lerp = q_slerp(q0, q1, t);
+    const SE3 T_lerp{R_from_quat(q_lerp), p_lerp};
 
-    SE3 T_se3 = interpolate_se3(T0, T1, t);
+    const SE3 T_se3 = interpolate_se3(T0, T1, t);
 
     // Paths (resampled every tick; fine for demo)
-    const int N = 100;
+    constexpr int N = 100;
     std::vector<Vec3> pts_lerp, pts_se3;
     pts_lerp.reserve(N + 1);
     pts_se3.reserve(N + 1);
@@ -592,19 +594,6 @@ int main(int, const char**) {
       SE3 Ti = interpolate_se3(T0, T1, s);
       pts_se3.push_back(Ti.p);
     }
-
-    // Screw axis from log(T0^{-1}T1)
-    SE3 dT = se3_mul(se3_inv(T0), T1);
-    auto [v, w] = se3_log(dT);
-    double wlen = norm(w);
-    Vec3 w_hat{0, 0, 0}, q{0, 0, 0};
-    if (wlen > 1e-8) {
-      w_hat = {w.x / wlen, w.y / wlen, w.z / wlen};
-      q = cross(w, v) * (1.0 / (wlen * wlen)); // a point on axis
-    }
-    // Draw axis as a segment around q
-    double L = 3.0;
-    std::vector<Vec3> axis_pts{q - w_hat * L, q + w_hat * L};
 
     // Entities
     SceneUpdate upd;
@@ -654,27 +643,6 @@ int main(int, const char**) {
       e.lines.push_back(
         line_from_points(pts_se3, rgba(0.96, 0.62, 0.11, 1.0), 2.0, true)); // orange
       upd.entities.push_back(std::move(e));
-    }
-    // Screw axis (if rotational)
-    if (wlen > 1e-8) {
-      SceneEntity e;
-      e.id = "screw_axis";
-      e.lines.push_back(line_from_points(axis_pts, rgba(0.98, 0.45, 0.17, 1.0), 1.5, true));
-      SpherePrimitive s;
-      s.pose = Pose{
-        v_to_schema(q), Quaternion{0, 0, 0, 1}
-      };
-      s.size = Vector3{0.10, 0.10, 0.10}; // diameter along x,y,z (radius 0.05 ⇒ size 0.10)
-      s.color = rgba(0.98, 0.57, 0.24, 1.0);
-      e.spheres.push_back(s);
-      upd.entities.push_back(std::move(e));
-    } else {
-      // If pure translation, remove any previous axis
-      SceneEntityDeletion del;
-      del.id = "screw_axis";
-      SceneUpdate tmp;
-      tmp.deletions.push_back(del);
-      scene.log(tmp);
     }
 
     scene.log(upd); // send one update (replaces entities by matching id)
