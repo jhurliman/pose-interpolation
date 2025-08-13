@@ -3,6 +3,7 @@
 #include <foxglove/schemas.hpp>
 #include <foxglove/server.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -12,6 +13,10 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+// shared state updated from Foxglove callbacks (callbacks can run on multiple threads)
+std::atomic<bool> g_animated{true};
+std::atomic<double> g_paramT{0.0};
 
 // ---------- Small math helpers (Vec/Quat/Mat3 + SE(3) log/exp) ----------
 struct Vec3 {
@@ -466,6 +471,48 @@ int main(int, const char**) {
   foxglove::WebSocketServerOptions ws_options;
   ws_options.host = "127.0.0.1";
   ws_options.port = 8765;
+  ws_options.capabilities =
+    ws_options.capabilities | foxglove::WebSocketServerCapabilities::Parameters;
+  ws_options.callbacks.onGetParameters = [&](uint32_t /*client_id*/,
+                                           std::optional<std::string_view> /*req_id*/,
+                                           const std::vector<std::string_view>& names) {
+    std::vector<foxglove::Parameter> out;
+    auto emit = [&](std::string_view n) {
+      if (n == "animated") {
+        out.emplace_back("animated", g_animated.load());
+      } else if (n == "t") {
+        out.emplace_back("t", g_paramT.load()); // double value
+      }
+    };
+    if (names.empty()) {
+      emit("animated");
+      emit("t");
+    } else {
+      for (auto n : names) {
+        emit(n);
+      }
+    }
+    return out;
+  };
+  ws_options.callbacks.onSetParameters = [&](uint32_t /*client_id*/,
+                                           std::optional<std::string_view> /*req_id*/,
+                                           const std::vector<foxglove::ParameterView>& params) {
+    for (const auto& p : params) {
+      if (p.name() == "animated" && p.is<bool>()) {
+        g_animated.store(p.get<bool>());
+      } else if (p.name() == "t" && p.is<double>()) {
+        g_paramT.store(std::clamp(p.get<double>(), 0.0, 1.0));
+      }
+    }
+
+    // Build result without copies (Parameter is move-only)
+    std::vector<foxglove::Parameter> result;
+    result.reserve(2);
+    result.emplace_back("animated", g_animated.load());
+    result.emplace_back("t", g_paramT.load());
+    return result;
+  };
+
   auto server_result = foxglove::WebSocketServer::create(std::move(ws_options));
   if (!server_result.has_value()) {
     std::cerr << "Failed to create server: " << foxglove::strerror(server_result.error()) << "\n";
@@ -510,14 +557,21 @@ int main(int, const char**) {
     auto now = std::chrono::steady_clock::now();
     double dt = std::chrono::duration<double>(now - last).count();
     last = now;
-    t += dir * dt * speed;
-    if (t > 1) {
-      t = 1;
-      dir = -1;
-    }
-    if (t < 0) {
-      t = 0;
-      dir = 1;
+    if (g_animated.load()) {
+      // Update t based on speed and direction
+      t += dir * dt * speed;
+      if (t > 1) {
+        t = 1;
+        dir = -1; // reverse direction
+      }
+      if (t < 0) {
+        t = 0;
+        dir = 1; // forward again
+      }
+      g_paramT.store(t); // update parameter value
+    } else {
+      // Use the parameter value from the Foxglove app
+      t = g_paramT.load();
     }
 
     // Interpolate
