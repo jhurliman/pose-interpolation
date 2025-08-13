@@ -1,3 +1,5 @@
+#include "math.hpp"
+
 #include <foxglove/channel.hpp>
 #include <foxglove/foxglove.hpp>
 #include <foxglove/schemas.hpp>
@@ -8,373 +10,41 @@
 #include <chrono>
 #include <cmath>
 #include <csignal>
+#include <cstdint>
 #include <functional>
 #include <iostream>
-#include <string>
+#include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 // shared state updated from Foxglove callbacks (callbacks can run on multiple threads)
 std::atomic<bool> g_animated{true};
 std::atomic<double> g_paramT{0.0};
 
-// ---------- Small math helpers (Vec/Quat/Mat3 + SE(3) log/exp) ----------
-struct Vec3 {
-  double x{}, y{}, z{};
-  Vec3() = default;
-
-  Vec3(double X, double Y, double Z) : x(X), y(Y), z(Z) {}
-
-  Vec3 operator+(const Vec3& b) const { return {x + b.x, y + b.y, z + b.z}; }
-
-  Vec3 operator-(const Vec3& b) const { return {x - b.x, y - b.y, z - b.z}; }
-
-  Vec3 operator*(double s) const { return {x * s, y * s, z * s}; }
-
-  Vec3& operator+=(const Vec3& b) {
-    x += b.x;
-    y += b.y;
-    z += b.z;
-    return *this;
-  }
-};
-
-inline double dot(const Vec3& a, const Vec3& b) {
-  return a.x * b.x + a.y * b.y + a.z * b.z;
-}
-
-inline Vec3 cross(const Vec3& a, const Vec3& b) {
-  return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
-}
-
-inline double norm(const Vec3& a) {
-  return std::sqrt(std::max(1e-18, dot(a, a)));
-}
-
-inline Vec3 normalized(const Vec3& a) {
-  double n = norm(a);
-  return {a.x / n, a.y / n, a.z / n};
-}
-
-struct Quat { // (x,y,z,w) per Foxglove schema
-  double x{}, y{}, z{}, w{1};
-};
-
-inline Quat q_mul(const Quat& a, const Quat& b) {
-  return {a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-    a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
-    a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
-    a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
-}
-
-inline double q_dot(const Quat& a, const Quat& b) {
-  return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
-}
-
-inline Quat q_normalized(Quat q) {
-  double n = std::sqrt(q_dot(q, q));
-  q.x /= n;
-  q.y /= n;
-  q.z /= n;
-  q.w /= n;
-  return q;
-}
-
-inline Quat q_conj(const Quat& q) {
-  return {-q.x, -q.y, -q.z, q.w};
-}
-
-inline Quat q_from_euler(double rx, double ry, double rz) { // XYZ intrinsic
-  const double cx = std::cos(rx * 0.5), sx = std::sin(rx * 0.5);
-  const double cy = std::cos(ry * 0.5), sy = std::sin(ry * 0.5);
-  const double cz = std::cos(rz * 0.5), sz = std::sin(rz * 0.5);
-  const Quat qx{sx, 0, 0, cx}, qy{0, sy, 0, cy}, qz{0, 0, sz, cz};
-  return q_normalized(q_mul(q_mul(qx, qy), qz));
-}
-
-inline Quat q_slerp(Quat a, Quat b, double t) {
-  a = q_normalized(a);
-  b = q_normalized(b);
-  double d = q_dot(a, b);
-  if (d < 0) {
-    b = {-b.x, -b.y, -b.z, -b.w};
-    d = -d;
-  }
-  constexpr double EPS = 1e-6;
-  if (1.0 - d < EPS) {
-    // LERP then normalize
-    const Quat q{
-      a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), a.z + t * (b.z - a.z), a.w + t * (b.w - a.w)};
-    return q_normalized(q);
-  }
-  const double theta = std::acos(d);
-  const double s = std::sin(theta);
-  const double w1 = std::sin((1 - t) * theta) / s;
-  const double w2 = std::sin(t * theta) / s;
-  return q_normalized(
-    {a.x * w1 + b.x * w2, a.y * w1 + b.y * w2, a.z * w1 + b.z * w2, a.w * w1 + b.w * w2});
-}
-
-struct Mat3 {
-  double m[3][3]{
-    {1, 0, 0},
-    {0, 1, 0},
-    {0, 0, 1}
-  };
-};
-
-inline Mat3 I3() {
-  return Mat3{};
-}
-
-inline Mat3 matmul(const Mat3& A, const Mat3& B) {
-  Mat3 C{};
-  for (int i = 0; i < 3; i++) {
-    for (int j = 0; j < 3; j++) {
-      C.m[i][j] = A.m[i][0] * B.m[0][j] + A.m[i][1] * B.m[1][j] + A.m[i][2] * B.m[2][j];
-    }
-  }
-  return C;
-}
-
-inline Vec3 Rmul(const Mat3& R, const Vec3& v) {
-  return {R.m[0][0] * v.x + R.m[0][1] * v.y + R.m[0][2] * v.z,
-    R.m[1][0] * v.x + R.m[1][1] * v.y + R.m[1][2] * v.z,
-    R.m[2][0] * v.x + R.m[2][1] * v.y + R.m[2][2] * v.z};
-}
-
-inline Mat3 R_from_quat(const Quat& q) {
-  Quat n = q_normalized(q);
-  double x = n.x, y = n.y, z = n.z, w = n.w;
-  Mat3 R{};
-  R.m[0][0] = 1 - 2 * (y * y + z * z);
-  R.m[0][1] = 2 * (x * y - z * w);
-  R.m[0][2] = 2 * (x * z + y * w);
-  R.m[1][0] = 2 * (x * y + z * w);
-  R.m[1][1] = 1 - 2 * (x * x + z * z);
-  R.m[1][2] = 2 * (y * z - x * w);
-  R.m[2][0] = 2 * (x * z - y * w);
-  R.m[2][1] = 2 * (y * z + x * w);
-  R.m[2][2] = 1 - 2 * (x * x + y * y);
-  return R;
-}
-
-inline Quat quat_from_R(const Mat3& R) {
-  const double tr = R.m[0][0] + R.m[1][1] + R.m[2][2];
-  Quat q;
-  if (tr > 0) {
-    const double S = std::sqrt(tr + 1.0) * 2;
-    q.w = 0.25 * S;
-    q.x = (R.m[2][1] - R.m[1][2]) / S;
-    q.y = (R.m[0][2] - R.m[2][0]) / S;
-    q.z = (R.m[1][0] - R.m[0][1]) / S;
-  } else if (R.m[0][0] > R.m[1][1] && R.m[0][0] > R.m[2][2]) {
-    const double S = std::sqrt(1.0 + R.m[0][0] - R.m[1][1] - R.m[2][2]) * 2;
-    q.w = (R.m[2][1] - R.m[1][2]) / S;
-    q.x = 0.25 * S;
-    q.y = (R.m[0][1] + R.m[1][0]) / S;
-    q.z = (R.m[0][2] + R.m[2][0]) / S;
-  } else if (R.m[1][1] > R.m[2][2]) {
-    const double S = std::sqrt(1.0 - R.m[0][0] + R.m[1][1] - R.m[2][2]) * 2;
-    q.w = (R.m[0][2] - R.m[2][0]) / S;
-    q.x = (R.m[0][1] + R.m[1][0]) / S;
-    q.y = 0.25 * S;
-    q.z = (R.m[1][2] + R.m[2][1]) / S;
-  } else {
-    const double S = std::sqrt(1.0 - R.m[0][0] - R.m[1][1] + R.m[2][2]) * 2;
-    q.w = (R.m[1][0] - R.m[0][1]) / S;
-    q.x = (R.m[0][2] + R.m[2][0]) / S;
-    q.y = (R.m[1][2] + R.m[2][1]) / S;
-    q.z = 0.25 * S;
-  }
-  return q_normalized(q);
-}
-
-inline Mat3 hat(const Vec3& w) {
-  Mat3 W{};
-  W.m[0][0] = 0;
-  W.m[0][1] = -w.z;
-  W.m[0][2] = w.y;
-  W.m[1][0] = w.z;
-  W.m[1][1] = 0;
-  W.m[1][2] = -w.x;
-  W.m[2][0] = -w.y;
-  W.m[2][1] = w.x;
-  W.m[2][2] = 0;
-  return W;
-}
-
-inline Mat3 add(const Mat3& A, const Mat3& B) {
-  Mat3 C{};
-  for (int i = 0; i < 3; i++) {
-    for (int j = 0; j < 3; j++) {
-      C.m[i][j] = A.m[i][j] + B.m[i][j];
-    }
-  }
-  return C;
-}
-
-inline Mat3 scale(const Mat3& A, double s) {
-  Mat3 C{};
-  for (int i = 0; i < 3; i++) {
-    for (int j = 0; j < 3; j++) {
-      C.m[i][j] = A.m[i][j] * s;
-    }
-  }
-  return C;
-}
-
-inline Mat3 so3_exp(const Vec3& w) {
-  const double th = norm(w);
-  const Mat3 I = I3();
-  if (th < 1e-8) {
-    const Mat3 W = hat(w);
-    const Mat3 W2 = matmul(W, W);
-    return add(I, add(scale(W, 1 - th * th / 6.0), scale(W2, 0.5 - th * th / 24.0)));
-  } else {
-    const Vec3 a = w * (1.0 / th);
-    const Mat3 W = hat(a), W2 = matmul(W, W);
-    const double s = std::sin(th), c = std::cos(th);
-    return add(I, add(scale(W, s), scale(W2, 1 - c)));
-  }
-}
-
-inline Vec3 vee(const Mat3& M) {
-  return {
-    0.5 * (M.m[2][1] - M.m[1][2]), 0.5 * (M.m[0][2] - M.m[2][0]), 0.5 * (M.m[1][0] - M.m[0][1])};
-}
-
-inline Vec3 so3_log(const Mat3& R) {
-  const double tr = R.m[0][0] + R.m[1][1] + R.m[2][2];
-  const double c = std::max(-1.0, std::min(1.0, (tr - 1.0) / 2.0));
-  const double th = std::acos(c);
-  if (th < 1e-8) {
-    Mat3 Rt{};
-    Rt.m[0][1] = R.m[0][1];
-    Rt.m[1][0] = R.m[1][0];
-    Rt.m[0][2] = R.m[0][2];
-    Rt.m[2][0] = R.m[2][0];
-    Rt.m[1][2] = R.m[1][2];
-    Rt.m[2][1] = R.m[2][1];
-    Mat3 S{}; // R - R^T packed in S off-diagonals
-    S.m[0][1] = R.m[0][1] - R.m[1][0];
-    S.m[1][0] = -S.m[0][1];
-    S.m[0][2] = R.m[0][2] - R.m[2][0];
-    S.m[2][0] = -S.m[0][2];
-    S.m[1][2] = R.m[1][2] - R.m[2][1];
-    S.m[2][1] = -S.m[1][2];
-    return vee(S);
-  } else {
-    Mat3 S{};
-    S.m[0][1] = R.m[0][1] - R.m[1][0];
-    S.m[1][0] = -S.m[0][1];
-    S.m[0][2] = R.m[0][2] - R.m[2][0];
-    S.m[2][0] = -S.m[0][2];
-    S.m[1][2] = R.m[1][2] - R.m[2][1];
-    S.m[2][1] = -S.m[1][2];
-    const double f = th / (2.0 * std::sin(th));
-    const Vec3 w = vee(S);
-    return {w.x * f, w.y * f, w.z * f};
-  }
-}
-
-inline Mat3 so3_left_jacobian(const Vec3& w) {
-  const double th = norm(w);
-  const Mat3 I = I3();
-  if (th < 1e-8) {
-    const Mat3 W = hat(w), W2 = matmul(W, W);
-    return add(I, add(scale(W, 0.5), scale(W2, 1.0 / 6.0)));
-  } else {
-    const Vec3 a = w * (1.0 / th);
-    const Mat3 W = hat(a), W2 = matmul(W, W);
-    const double A = (1 - std::cos(th)) / (th * th);
-    const double B = (th - std::sin(th)) / (th * th * th);
-    return add(I, add(scale(W, A * th), scale(W2, B * th * th)));
-  }
-}
-
-inline Mat3 so3_left_jacobian_inv(const Vec3& w) {
-  const double th = norm(w);
-  const Mat3 I = I3();
-  if (th < 1e-8) {
-    const Mat3 W = hat(w), W2 = matmul(W, W);
-    return add(I, add(scale(W, -0.5), scale(W2, 1.0 / 12.0)));
-  } else {
-    const Vec3 a = w * (1.0 / th);
-    const Mat3 W = hat(a), W2 = matmul(W, W);
-    const double half = 0.5;
-    const double cot_half = (1 + std::cos(th)) / std::sin(th); // cot(th/2)
-    const double B = (1.0 / (th * th)) * (1 - (th * 0.5) * cot_half);
-    return add(I, add(scale(W, -half * th), scale(W2, B * th * th)));
-  }
-}
-
-struct SE3 {
-  Mat3 R;
-  Vec3 p;
-};
-
-inline SE3 se3_exp(const Vec3& v, const Vec3& w) {
-  const Mat3 R = so3_exp(w);
-  const Mat3 J = so3_left_jacobian(w);
-  Vec3 p = {J.m[0][0] * v.x + J.m[0][1] * v.y + J.m[0][2] * v.z,
-    J.m[1][0] * v.x + J.m[1][1] * v.y + J.m[1][2] * v.z,
-    J.m[2][0] * v.x + J.m[2][1] * v.y + J.m[2][2] * v.z};
-  return {R, p};
-}
-
-inline std::pair<Vec3, Vec3> se3_log(const SE3& T) {
-  const Vec3 w = so3_log(T.R);
-  const Mat3 Jinv = so3_left_jacobian_inv(w);
-  Vec3 v{Jinv.m[0][0] * T.p.x + Jinv.m[0][1] * T.p.y + Jinv.m[0][2] * T.p.z,
-    Jinv.m[1][0] * T.p.x + Jinv.m[1][1] * T.p.y + Jinv.m[1][2] * T.p.z,
-    Jinv.m[2][0] * T.p.x + Jinv.m[2][1] * T.p.y + Jinv.m[2][2] * T.p.z};
-  return {v, w};
-}
-
-inline SE3 se3_mul(const SE3& A, const SE3& B) {
-  return {matmul(A.R, B.R), A.p + Rmul(A.R, B.p)};
-}
-
-inline SE3 se3_inv(const SE3& T) {
-  Mat3 Rt{}; // transpose
-  Rt.m[0][0] = T.R.m[0][0];
-  Rt.m[0][1] = T.R.m[1][0];
-  Rt.m[0][2] = T.R.m[2][0];
-  Rt.m[1][0] = T.R.m[0][1];
-  Rt.m[1][1] = T.R.m[1][1];
-  Rt.m[1][2] = T.R.m[2][1];
-  Rt.m[2][0] = T.R.m[0][2];
-  Rt.m[2][1] = T.R.m[1][2];
-  Rt.m[2][2] = T.R.m[2][2];
-  Vec3 p = Rmul(Rt, Vec3{-T.p.x, -T.p.y, -T.p.z});
-  return {Rt, p};
-}
-
-// Interpolants
-inline SE3 interpolate_se3(const SE3& T0, const SE3& T1, double t) {
-  const SE3 dT = se3_mul(se3_inv(T0), T1);
-  const auto [v, w] = se3_log(dT);
-  const SE3 dTt = se3_exp(Vec3{v.x * t, v.y * t, v.z * t}, Vec3{w.x * t, w.y * t, w.z * t});
-  return se3_mul(T0, dTt);
-}
-
-inline Vec3 lerp(const Vec3& a, const Vec3& b, double t) {
-  return a * (1.0 - t) + b * t;
-}
+using math::interpolate_se3;
+using math::lerp;
+using math::Mat3;
+using math::q_from_euler;
+using math::q_slerp;
+using math::Quat;
+using math::quat_from_R;
+using math::R_from_quat;
+using math::SE3;
+using math::Vec3;
 
 // ---------- Foxglove helpers ----------
 using namespace foxglove::schemas;
 
-inline Color rgba(double r, double g, double b, double a = 1.0) {
+constexpr Color rgba(double r, double g, double b, double a = 1.0) {
   return Color{r, g, b, a};
 }
 
-inline Quaternion q_to_schema(const Quat& q) {
+constexpr Quaternion q_to_schema(const Quat& q) {
   return Quaternion{q.x, q.y, q.z, q.w};
 }
 
-inline Vector3 v_to_schema(const Vec3& v) {
+constexpr Vector3 v_to_schema(const Vec3& v) {
   return Vector3{v.x, v.y, v.z};
 }
 
@@ -382,7 +52,6 @@ inline Pose pose_from_se3(const SE3& T) {
   return Pose{v_to_schema(T.p), q_to_schema(quat_from_R(T.R))};
 }
 
-// Triad arrows (X red, Y green, Z blue). Arrow points along +X in local frame.
 static ArrowPrimitive make_arrow(
   const Pose& base, const Quat& extra_rot, const Color& c, double L = 0.3, double d = 0.02) {
   Pose p = base;
@@ -408,7 +77,7 @@ static ArrowPrimitive make_arrow(
   return a;
 }
 
-static foxglove::schemas::TextPrimitive make_label_above(const SE3& T, const std::string& text) {
+static foxglove::schemas::TextPrimitive make_label_above(const SE3& T, std::string_view text) {
   using namespace foxglove::schemas;
   TextPrimitive tx;
 
@@ -429,16 +98,17 @@ static foxglove::schemas::TextPrimitive make_label_above(const SE3& T, const std
   return tx;
 }
 
-static Quat q_axis_y() { // rot +90deg about Z: +X -> +Y
+static inline Quat q_axis_y() { // rot +90deg about Z: +X -> +Y
   const double s = std::sin(M_PI * 0.25), c = std::cos(M_PI * 0.25);
   return Quat{0, 0, s, c};
 }
 
-static Quat q_axis_z() { // rot +90deg about Y: +X -> +Z
+static inline Quat q_axis_z() { // rot +90deg about Y: +X -> +Z
   const double s = std::sin(M_PI * 0.25), c = std::cos(M_PI * 0.25);
   return Quat{0, s, 0, c};
 }
 
+// Triad arrows (X red, Y green, Z blue). Arrow points along +X in local frame.
 static void add_triad(SceneEntity& e, const Pose& base, double scale = 0.35) {
   e.arrows.push_back(make_arrow(base, Quat{0, 0, 0, 1}, rgba(1, 0, 0, 1), scale, 0.02)); // X red
   e.arrows.push_back(make_arrow(base, q_axis_y(), rgba(0, 1, 0, 1), scale, 0.02)); // Y green
@@ -473,16 +143,15 @@ int main(int, const char**) {
   foxglove::WebSocketServerOptions ws_options;
   ws_options.host = "127.0.0.1";
   ws_options.port = 8765;
-  ws_options.capabilities =
-    ws_options.capabilities | foxglove::WebSocketServerCapabilities::Parameters;
+  ws_options.capabilities = foxglove::WebSocketServerCapabilities::Parameters;
   ws_options.callbacks.onGetParameters = [&](uint32_t /*client_id*/,
                                            std::optional<std::string_view> /*req_id*/,
                                            const std::vector<std::string_view>& names) {
     std::vector<foxglove::Parameter> out;
     auto emit = [&](std::string_view n) {
-      if (n == "animated") {
+      if (n == std::string_view("animated")) {
         out.emplace_back("animated", g_animated.load());
-      } else if (n == "t") {
+      } else if (n == std::string_view("t")) {
         out.emplace_back("t", g_paramT.load()); // double value
       }
     };
@@ -500,9 +169,9 @@ int main(int, const char**) {
                                            std::optional<std::string_view> /*req_id*/,
                                            const std::vector<foxglove::ParameterView>& params) {
     for (const auto& p : params) {
-      if (p.name() == "animated" && p.is<bool>()) {
+      if (p.name() == std::string_view("animated") && p.is<bool>()) {
         g_animated.store(p.get<bool>());
-      } else if (p.name() == "t" && p.is<double>()) {
+      } else if (p.name() == std::string_view("t") && p.is<double>()) {
         g_paramT.store(std::clamp(p.get<double>(), 0.0, 1.0));
       }
     }
@@ -532,7 +201,7 @@ int main(int, const char**) {
   }
   auto scene = std::move(scene_chan_result.value());
 
-  // ---- Start & End poses (match the React demo) ----
+  // ---- Start & End poses ----
   const Vec3 p0{-1.2, 0.4, -0.6};
   const Quat q0 = q_from_euler(0.2, 0.6, -0.1);
   const Vec3 p1{1.1, 0.5, 0.8};
@@ -572,7 +241,7 @@ int main(int, const char**) {
       }
       g_paramT.store(t); // update parameter value
     } else {
-      // Use the parameter value from the Foxglove app
+      // Use the parameter value from the client
       t = g_paramT.load();
     }
 
@@ -583,7 +252,7 @@ int main(int, const char**) {
 
     const SE3 T_se3 = interpolate_se3(T0, T1, t);
 
-    // Paths (resampled every tick; fine for demo)
+    // Paths (resampled every tick; fine for a demo)
     constexpr int N = 100;
     std::vector<Vec3> pts_lerp, pts_se3;
     pts_lerp.reserve(N + 1);
@@ -595,7 +264,7 @@ int main(int, const char**) {
       pts_se3.push_back(Ti.p);
     }
 
-    // Entities
+    // 3D rendered entities
     SceneUpdate upd;
 
     // Start frame triad (green label color via ARGB already on arrows)
@@ -614,7 +283,7 @@ int main(int, const char**) {
       add_triad(e, pose_from_se3(T1), 0.35);
       upd.entities.push_back(std::move(e));
     }
-    // Moving frame: LERP+SLERP (blue-ish)
+    // Moving frame: LERP+SLERP
     {
       SceneEntity e;
       e.id = "lerp_frame";
@@ -622,7 +291,7 @@ int main(int, const char**) {
       add_triad(e, pose_from_se3(T_lerp), 0.30);
       upd.entities.push_back(std::move(e));
     }
-    // Moving frame: SE(3) (orange-ish)
+    // Moving frame: SE(3)
     {
       SceneEntity e;
       e.id = "se3_frame";
@@ -630,13 +299,14 @@ int main(int, const char**) {
       add_triad(e, pose_from_se3(T_se3), 0.30);
       upd.entities.push_back(std::move(e));
     }
-    // Paths
+    // LERP+SLERP path (blue-ish)
     {
       SceneEntity e;
       e.id = "lerp_path";
       e.lines.push_back(line_from_points(pts_lerp, rgba(0.23, 0.51, 0.96, 1.0), 2.0, true)); // blue
       upd.entities.push_back(std::move(e));
     }
+    // SE(3) path (orange-ish)
     {
       SceneEntity e;
       e.id = "se3_path";
@@ -647,11 +317,13 @@ int main(int, const char**) {
 
     scene.log(upd); // send one update (replaces entities by matching id)
 
-    // Continuously publish parameter values
-    std::vector<foxglove::Parameter> params;
-    params.emplace_back("animated", g_animated.load());
-    params.emplace_back("t", std::floor(g_paramT.load() * 100.0) / 100.0);
-    server.publishParameterValues(std::move(params));
+    if (g_animated.load()) {
+      // Continuously publish parameter values
+      std::vector<foxglove::Parameter> params;
+      params.emplace_back("animated", true);
+      params.emplace_back("t", std::floor(g_paramT.load() * 100.0) / 100.0);
+      server.publishParameterValues(std::move(params));
+    }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(33)); // ~30 Hz
   }
