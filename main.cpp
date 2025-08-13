@@ -659,7 +659,6 @@ int main(int, const char**) {
     if (wlen > 1e-8) {
       SceneEntity e;
       e.id = "screw_axis";
-      e.texts.push_back(make_label_above(T_lerp, "Screw axis"));
       e.lines.push_back(line_from_points(axis_pts, rgba(0.98, 0.45, 0.17, 1.0), 1.5, true));
       SpherePrimitive s;
       s.pose = Pose{
